@@ -10,6 +10,7 @@ import tempfile
 import argparse
 from collections import Counter, defaultdict
 from netrd.utilities import entropy as netrd_entropy
+from netrd.distance.portrait_divergence import portrait_divergence
 import numpy as np
 import networkx as nx
 
@@ -105,7 +106,7 @@ def shortest_paths_rust(graph, fname=None, keepfile=False, algorithm="dijkstra")
     
     nx.write_weighted_edgelist(graph, f+".edgelist", delimiter=",")
     
-    os.system("./rust-shortest-path --algorithm {} --input {}.edgelist --output {}.paths > /dev/null".format(algorithm, f, f))
+    os.system("./shortest-path --algorithm {} --input {}.edgelist --output {}.paths > /dev/null".format(algorithm, f, f))
     
     paths = np.loadtxt("{}.paths".format(f), delimiter=",")
     if not keepfile:
@@ -203,63 +204,6 @@ def _graph_or_portrait(X):
     if isinstance(X, (nx.Graph, nx.DiGraph)):
         return portrait(X)
     return X
-
-
-def _get_prob_distance(B):
-    """
-    Helper function.
-    """
-    d, K = B.shape
-
-    v = np.arange(0, K)
-    f = (B * v).sum(axis=1)
-    return f / f.sum()
-
-
-def _get_prob_k_given_L(B, N=None):
-    """
-    Helper function.
-    """
-    if N is None:
-        N = int(B[0, 1])
-    return B / N
-
-
-# Using the portrait_divergence from netrd
-def portrait_divergence(G1, G2, N1=None, N2=None):
-    """
-    Compute the portrait divergence between graphs G1 and G2.
-
-    Parameters
-    ----------
-    G1, G2 (nx.Graph or nx.DiGraph):
-        Two graphs to compare.
-
-    Returns
-    -------
-    JSDpq (float):
-        the Jensen-Shannon divergence between the portraits of G1 and G2
-
-    """
-    BG1 = _graph_or_portrait(G1)
-    BG2 = _graph_or_portrait(G2)
-    BG1, BG2 = pad_portraits_to_same_size(BG1, BG2)
-
-    # build joint distribution for G:
-    P_L = _get_prob_distance(BG1)
-    P_KgL = _get_prob_k_given_L(BG1, N=N1)
-    P_KaL = P_KgL * P_L[:, None]
-
-    # build joint distribution for H:
-    Q_L = _get_prob_distance(BG2)
-    Q_KgL = _get_prob_k_given_L(BG2, N=N2)
-    Q_KaL = Q_KgL * Q_L[:, None]
-
-    # flatten distribution matrices as arrays:
-    P = P_KaL.ravel()
-    Q = Q_KaL.ravel()
-
-    return netrd_entropy.js_divergence(P, Q), 
 
 
 def portrait_divergence_weighted(G,H, bins=None, binedges=None, algorithm="dijkstra"):
