@@ -1,0 +1,3 @@
+[submodule "rust-shortest-path"]
+	path = rust-shortest-path
+	url = git@github.com:KristonCosta/rust-shortest-path.git

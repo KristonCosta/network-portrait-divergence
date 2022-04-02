@@ -8,10 +8,10 @@
 import sys, os
 import tempfile
 import argparse
-from collections import Counter
+from collections import Counter, defaultdict
+from netrd.utilities import entropy as netrd_entropy
 import numpy as np
 import networkx as nx
-from scipy.stats import entropy
 
 
 def portrait_cpp(graph, fname=None, keepfile=False):
@@ -96,8 +96,36 @@ def portrait_py(graph):
     return B[:max_path+1,:]
 
 
-portrait = portrait_py
+def shortest_paths_rust(graph, fname=None, keepfile=False, algorithm="dijkstra"):
+    f = fname
+    if fname is None:
+        f = next(tempfile._get_candidate_names())
+    
+    graph = nx.convert_node_labels_to_integers(graph)
+    
+    nx.write_weighted_edgelist(graph, f+".edgelist", delimiter=",")
+    
+    os.system("./rust-shortest-path --algorithm {} --input {}.edgelist --output {}.paths > /dev/null".format(algorithm, f, f))
+    
+    paths = np.loadtxt("{}.paths".format(f), delimiter=",")
+    if not keepfile:
+        os.remove(f+".edgelist")
+        os.remove(f+".paths")
+    
+    path_dict = defaultdict(lambda : defaultdict(dict))
+    for (src, dst, length) in paths: 
+        path_dict[src][dst] = length 
+
+    return [(src, paths) for src, paths in path_dict.items()]
+
+
+portrait = portrait_cpp
 #portrait = portrait_cpp
+
+
+def set_portrait(p): 
+    global portrait 
+    portrait = p 
 
 
 def weighted_portrait(G, paths=None, binedges=None):
@@ -177,33 +205,64 @@ def _graph_or_portrait(X):
     return X
 
 
-def portrait_divergence(G, H):
-    """Compute the network portrait divergence between graphs G and H."""
-    
-    BG = _graph_or_portrait(G)
-    BH = _graph_or_portrait(H)
-    BG, BH = pad_portraits_to_same_size(BG,BH)
-    
-    L, K = BG.shape
-    V = np.tile(np.arange(K),(L,1))
-    
-    XG = BG*V / (BG*V).sum()
-    XH = BH*V / (BH*V).sum()
-    
+def _get_prob_distance(B):
+    """
+    Helper function.
+    """
+    d, K = B.shape
+
+    v = np.arange(0, K)
+    f = (B * v).sum(axis=1)
+    return f / f.sum()
+
+
+def _get_prob_k_given_L(B, N=None):
+    """
+    Helper function.
+    """
+    if N is None:
+        N = int(B[0, 1])
+    return B / N
+
+
+# Using the portrait_divergence from netrd
+def portrait_divergence(G1, G2, N1=None, N2=None):
+    """
+    Compute the portrait divergence between graphs G1 and G2.
+
+    Parameters
+    ----------
+    G1, G2 (nx.Graph or nx.DiGraph):
+        Two graphs to compare.
+
+    Returns
+    -------
+    JSDpq (float):
+        the Jensen-Shannon divergence between the portraits of G1 and G2
+
+    """
+    BG1 = _graph_or_portrait(G1)
+    BG2 = _graph_or_portrait(G2)
+    BG1, BG2 = pad_portraits_to_same_size(BG1, BG2)
+
+    # build joint distribution for G:
+    P_L = _get_prob_distance(BG1)
+    P_KgL = _get_prob_k_given_L(BG1, N=N1)
+    P_KaL = P_KgL * P_L[:, None]
+
+    # build joint distribution for H:
+    Q_L = _get_prob_distance(BG2)
+    Q_KgL = _get_prob_k_given_L(BG2, N=N2)
+    Q_KaL = Q_KgL * Q_L[:, None]
+
     # flatten distribution matrices as arrays:
-    P = XG.ravel()
-    Q = XH.ravel()
-    
-    # lastly, get JSD:
-    M = 0.5*(P+Q)
-    KLDpm = entropy(P, M, base=2)
-    KLDqm = entropy(Q, M, base=2)
-    JSDpq = 0.5*(KLDpm + KLDqm)
-    
-    return JSDpq
+    P = P_KaL.ravel()
+    Q = Q_KaL.ravel()
+
+    return netrd_entropy.js_divergence(P, Q), 
 
 
-def portrait_divergence_weighted(G,H, bins=None, binedges=None):
+def portrait_divergence_weighted(G,H, bins=None, binedges=None, algorithm="dijkstra"):
     """Network portrait divergence between two weighted graphs.
     
     bins = width of bins in percentiles
@@ -212,8 +271,8 @@ def portrait_divergence_weighted(G,H, bins=None, binedges=None):
     """
     
     # get joint binning:
-    paths_G = list(nx.all_pairs_dijkstra_path_length(G))
-    paths_H = list(nx.all_pairs_dijkstra_path_length(H))
+    paths_G = shortest_paths_rust(G, algorithm=algorithm)
+    paths_H = shortest_paths_rust(H, algorithm=algorithm)
     
     # get bin_edges in common for G and H:
     if binedges is None:
